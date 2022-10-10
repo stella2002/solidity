@@ -1,0 +1,100 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+//英式拍卖
+
+interface IERC721 {
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint tokenId
+    ) external;
+
+    function transferFrom(
+        address,
+        address,
+        uint
+    ) external;
+}
+
+contract EnglishAuction {
+    event Start();
+    event Bid(address indexed sender, uint amount);
+    event Withdraw(address indexed bidder, uint amount);
+    event End(address winner, uint amount);
+
+    IERC721 public nft;//用IERC721定义nft
+    uint public nftId; //定义指定当前合约可以操作哪一个nftid
+
+    address payable public seller;//规定了销售者的地址
+    uint public endAt;//定义结束事件
+    bool public started;//定义是否开始
+    bool public ended;//定义是否已经结束
+
+    //针对购买者创建变量
+    address public highestBidder;//最高出价者地址
+    uint public highestBid;//最高出价者所出价格
+    mapping(address => uint) public bids;//记录每一个出价者的出价
+
+    constructor(//构造函数定义所拍nft的地址，nftID，和起拍价格
+        address _nft,
+        uint _nftId,
+        uint _startingBid
+    ) {
+        nft = IERC721(_nft);//将nft地址和id赋值
+        nftId = _nftId;
+
+        seller = payable(msg.sender);//把销售者定义为合约的部署者，因为需要把拍卖所得的主币发送给部署者，所以需要payable类型
+        highestBid = _startingBid;
+    }
+
+    function start() external {//开始拍卖函数
+        require(!started, "started");//判断当前状态是没有开始
+        require(msg.sender == seller, "not seller");//判断部署者和卖家一致
+
+        nft.transferFrom(msg.sender, address(this), nftId);//将销售者账户的nft发送到当前合约
+        started = true;//让拍卖开始
+        endAt = block.timestamp + 7 days;//定义结束时间
+
+        emit Start();//触发开始事件
+    }
+
+    function bid() external payable {//定义拍卖的函数方法
+        require(started, "not started");//判断拍卖已经开始
+        require(block.timestamp < endAt, "ended");//判断拍卖没有结束
+        require(msg.value > highestBid, "value < highest");//判断发送的币要大于上一个最高出价
+
+        if (highestBidder != address(0)) {//将上一个人（没竞拍成功的人）的币退还给他
+            bids[highestBidder] += highestBid;
+        }
+
+        highestBidder = msg.sender;//更新出价者地址
+        highestBid = msg.value;//更新最高价
+
+        emit Bid(msg.sender, msg.value);
+    }
+
+    function withdraw() external {//取回之前出价的方法
+        uint bal = bids[msg.sender];
+        bids[msg.sender] = 0;
+        payable(msg.sender).transfer(bal);
+
+        emit Withdraw(msg.sender, bal);//触发取款事件
+    }
+
+    function end() external {//结束拍卖方法，任何人都可以调用，不需要确认身份就不要确认，否则会浪费gas
+        require(started, "not started");//判断拍卖状态是开始
+        require(block.timestamp >= endAt, "not ended");//当前时间大于结束的时间
+        require(!ended, "ended");//判断拍卖状态未结束
+
+        ended = true;
+        if (highestBidder != address(0)) {//判断有人出价
+            nft.safeTransferFrom(address(this), highestBidder, nftId);//将nft从卖家的地址发送到最高出价者地址
+            seller.transfer(highestBid);//将所拍的的币发送到拍卖者的地址
+        } else {//如果没有人出价，将nft退还给销售者
+            nft.safeTransferFrom(address(this), seller, nftId);
+        }
+
+        emit End(highestBidder, highestBid);//出发结束拍卖事件
+    }
+}
